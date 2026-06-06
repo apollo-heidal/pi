@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -686,6 +687,73 @@ export default function(pi: ExtensionAPI) {
 			expect(runner.getCommand("deploy:1")?.description).toBe("explicit command");
 			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
+		});
+	});
+
+	describe("gitContextBoundary", () => {
+		it("should exclude context files above the git root when gitContextBoundary is true", async () => {
+			// top-level AGENTS.md should not be in agentsFiles since it is outside of root boundary
+			const repoDir = join(tempDir, "repo");
+			mkdirSync(repoDir, { recursive: true });
+			execSync("git init", { cwd: repoDir, stdio: "ignore" });
+
+			const projectDir = join(repoDir, "project");
+			mkdirSync(projectDir, { recursive: true });
+
+			writeFileSync(join(tempDir, "AGENTS.md"), "# Outside the repo — should be excluded.");
+			writeFileSync(join(repoDir, "AGENTS.md"), "# Repo root context.");
+			writeFileSync(join(projectDir, "AGENTS.md"), "# Project context.");
+
+			const loader = new DefaultResourceLoader({ cwd: projectDir, agentDir, gitContextBoundary: true });
+			await loader.reload();
+
+			const { agentsFiles } = loader.getAgentsFiles();
+			const paths = agentsFiles.map((f) => f.path);
+
+			expect(paths.some((p) => p.endsWith(join("repo", "AGENTS.md")))).toBe(true);
+			expect(paths.some((p) => p.endsWith(join("repo", "project", "AGENTS.md")))).toBe(true);
+			expect(paths.some((p) => p === join(tempDir, "AGENTS.md"))).toBe(false);
+		});
+
+		it("should include context files above the git root when gitContextBoundary is false (default)", async () => {
+			// top-level AGENTS.md SHOULD BE in agentsFiles because gitContextBoundary=false
+			const repoDir = join(tempDir, "repo");
+			mkdirSync(repoDir, { recursive: true });
+			execSync("git init", { cwd: repoDir, stdio: "ignore" });
+
+			const projectDir = join(repoDir, "project");
+			mkdirSync(projectDir, { recursive: true });
+
+			writeFileSync(join(tempDir, "AGENTS.md"), "# Outside the repo.");
+			writeFileSync(join(repoDir, "AGENTS.md"), "# Repo root context.");
+			writeFileSync(join(projectDir, "AGENTS.md"), "# Project context.");
+
+			const loader = new DefaultResourceLoader({ cwd: projectDir, agentDir, gitContextBoundary: false });
+			await loader.reload();
+
+			const { agentsFiles } = loader.getAgentsFiles();
+			const paths = agentsFiles.map((f) => f.path);
+
+			expect(paths.some((p) => p === join(tempDir, "AGENTS.md"))).toBe(true);
+			expect(paths.some((p) => p.endsWith(join("repo", "AGENTS.md")))).toBe(true);
+			expect(paths.some((p) => p.endsWith(join("repo", "project", "AGENTS.md")))).toBe(true);
+		});
+
+		it("should fall back to full ancestor walk when gitContextBoundary is true but not in a git repo", async () => {
+			// gitContextBoundary=true should have no affect on agentsFiles
+			const projectDir = join(tempDir, "project");
+			mkdirSync(projectDir, { recursive: true });
+			writeFileSync(join(tempDir, "AGENTS.md"), "# Ancestor context.");
+			writeFileSync(join(projectDir, "AGENTS.md"), "# Project context.");
+
+			const loader = new DefaultResourceLoader({ cwd: projectDir, agentDir, gitContextBoundary: true });
+			await loader.reload();
+
+			const { agentsFiles } = loader.getAgentsFiles();
+			const paths = agentsFiles.map((f) => f.path);
+
+			expect(paths.some((p) => p === join(tempDir, "AGENTS.md"))).toBe(true);
+			expect(paths.some((p) => p.endsWith(join("project", "AGENTS.md")))).toBe(true);
 		});
 	});
 });
